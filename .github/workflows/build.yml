@@ -1,0 +1,800 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Android project files
+        run: |
+          set -e
+          mkdir -p android/app/src/main/java/com/officealy/bulk android/app/src/main/assets
+          cat > android/settings.gradle.kts <<'FILE_END_1'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "OfficeAllyBulk"
+          include(":app")
+          FILE_END_1
+          cat > android/build.gradle.kts <<'FILE_END_2'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          FILE_END_2
+          cat > android/gradle.properties <<'FILE_END_3'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          FILE_END_3
+          cat > android/app/build.gradle.kts <<'FILE_END_4'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.officealy.bulk"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.officealy.bulk"
+                  minSdk = 29
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+          }
+          FILE_END_4
+          cat > android/app/src/main/AndroidManifest.xml <<'FILE_END_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="OfficeAlly Bulk"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          FILE_END_5
+          cat > android/app/src/main/assets/scrape.js <<'FILE_END_6'
+          (function () {
+            var data = {
+              'Transaction ID': '', 'Member Name': '', 'Member ID': '', 'Date of Birth': '',
+              'Gender': '', 'Address': '', 'Group Number': '', 'Plan Begin Date': '',
+              'Plan Name': '', 'Payer': '', 'Coverage Status': '', 'Identifier Code': ''
+            };
+
+            var titleEl = document.querySelector('.summary__value');
+            if (titleEl) {
+              var t = (titleEl.innerText || '').trim();
+              if (/Transaction ID/i.test(t)) data['Transaction ID'] = t.replace(/Transaction ID:?/i, '').trim();
+            }
+            if (!data['Transaction ID']) {
+              var m0 = (document.body.innerText || '').match(/Transaction ID[:\s]*([A-Z0-9\-]+)/i);
+              if (m0) data['Transaction ID'] = m0[1].trim();
+            }
+
+            document.querySelectorAll('.summary__group').forEach(function (group) {
+              var labelEl = group.querySelector('.summary__label');
+              var valueEl = group.querySelector('.summary__value');
+              var label = (labelEl ? labelEl.innerText : '').trim();
+              var value = (valueEl ? valueEl.innerText : '').trim().replace(/\n+/g, ' ');
+              if (!label || !value) return;
+              var l = label.toLowerCase();
+              if (l.includes('member name') || l === 'name') data['Member Name'] = value;
+              else if (l.includes('member id') || l.includes('subscriber id') || l === 'id') data['Member ID'] = value;
+              else if (l.includes('date of birth') || l.includes('dob') || l.includes('birth')) data['Date of Birth'] = value;
+              else if (l.includes('gender') || l.includes('sex')) data['Gender'] = value;
+              else if (l.includes('address')) data['Address'] = value;
+              else if (l.includes('group number') || l.includes('group #') || l.includes('group id')) data['Group Number'] = value;
+              else if (l.includes('plan begin') || l.includes('effective') || l.includes('start date')) data['Plan Begin Date'] = value;
+              else if (l.includes('plan name') || l.includes('plan type')) data['Plan Name'] = value;
+              else if (l.includes('identifier code') || l.includes('identifier')) data['Identifier Code'] = value;
+              else if (l.includes('transaction')) data['Transaction ID'] = data['Transaction ID'] || value;
+              else data[label] = value;
+            });
+
+            var body = document.body.innerText || '';
+            function fill(key, re) {
+              if (data[key]) return;
+              var m = body.match(re);
+              if (m) data[key] = m[1].trim();
+            }
+            fill('Member Name', /Member Name[:\s]*([^\n]+)/i);
+            fill('Member ID', /(?:Member ID|Subscriber ID)[:\s]*([A-Z0-9\-]+)/i);
+            fill('Date of Birth', /(?:Date of Birth|DOB)[:\s]*([0-9\/\-]+)/i);
+            fill('Gender', /Gender[:\s]*(Male|Female|M|F|Other)/i);
+            fill('Address', /Address[:\s]*([^\n]+)/i);
+            fill('Group Number', /Group (?:Number|#|ID)[:\s]*([A-Z0-9\-]+)/i);
+            fill('Plan Begin Date', /(?:Plan Begin Date|Effective Date|Start Date)[:\s]*([0-9\/\-]+)/i);
+            fill('Plan Name', /Plan Name[:\s]*([^\n]+)/i);
+
+            var payerBtn = document.querySelector('button.btn.payer, button.payer, .btn.payer');
+            if (payerBtn) {
+              var nameEl = payerBtn.querySelector('.fs-18, .fw-500, p:not(.payer__label)');
+              if (nameEl) data['Payer'] = nameEl.innerText.trim();
+              else {
+                var all = payerBtn.innerText.replace(/Payer/i, '').replace(/Active Coverage|Inactive/i, '').trim();
+                if (all) data['Payer'] = all;
+              }
+              var statusEl = payerBtn.querySelector('.payer__status, .payer__coverage');
+              if (statusEl) data['Coverage Status'] = statusEl.innerText.trim();
+            }
+            if (!data['Coverage Status'] && /Active Coverage/i.test(body)) data['Coverage Status'] = 'Active Coverage';
+            if (!data['Payer']) {
+              var mp = body.match(/Payer[:\s]*([^\n]+)/i);
+              if (mp) data['Payer'] = mp[1].replace(/Active Coverage|Inactive/i, '').trim();
+            }
+
+            if (!data['Identifier Code']) {
+              var idTitle = Array.from(document.querySelectorAll('.subgroup__title, .subgroup__pill, span, div, p, label'))
+                .find(function (el) { return /Identifier Code/i.test(el.innerText || '') && (el.innerText || '').trim().length < 40; });
+              if (idTitle) {
+                var group = idTitle.closest('.subgroup, .summary__group, [class*="subgroup"], [class*="group"]') || idTitle.parentElement;
+                if (group) {
+                  var cands = group.querySelectorAll('.subgroup__value, .summary__value, .fs-14, .fs-16, .fw-500, span, p, div');
+                  for (var i = 0; i < cands.length; i++) {
+                    var txt = (cands[i].innerText || '').trim();
+                    if (txt && !/Identifier Code/i.test(txt) && txt.length > 1 && txt.length < 50) {
+                      data['Identifier Code'] = txt;
+                      break;
+                    }
+                  }
+                  if (!data['Identifier Code'] && idTitle.nextElementSibling) {
+                    var next = (idTitle.nextElementSibling.innerText || '').trim();
+                    if (next && !/Identifier Code/i.test(next)) data['Identifier Code'] = next;
+                  }
+                }
+              }
+              if (!data['Identifier Code']) {
+                var mi = body.match(/Identifier Code[:\s]*([A-Z0-9\-]+)/i);
+                if (mi) data['Identifier Code'] = mi[1].trim();
+              }
+            }
+            return JSON.stringify(data);
+          })();
+          FILE_END_6
+          cat > android/app/src/main/java/com/officealy/bulk/MainActivity.kt <<'FILE_END_7'
+          package com.officealy.bulk
+
+          import android.annotation.SuppressLint
+          import android.app.Activity
+          import android.content.ContentValues
+          import android.graphics.Typeface
+          import android.os.Bundle
+          import android.os.Environment
+          import android.provider.MediaStore
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.WindowManager
+          import android.webkit.CookieManager
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.Button
+          import android.widget.CheckBox
+          import android.widget.EditText
+          import android.widget.FrameLayout
+          import android.widget.LinearLayout
+          import android.widget.ProgressBar
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.Job
+          import kotlinx.coroutines.SupervisorJob
+          import kotlinx.coroutines.cancel
+          import kotlinx.coroutines.coroutineScope
+          import kotlinx.coroutines.delay
+          import kotlinx.coroutines.isActive
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.suspendCancellableCoroutine
+          import kotlinx.coroutines.withTimeoutOrNull
+          import org.json.JSONObject
+          import org.json.JSONTokener
+          import java.io.File
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import kotlin.coroutines.resume
+
+          class MainActivity : Activity() {
+
+              companion object {
+                  const val DESKTOP_UA =
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                  const val MAX_WAIT_MS = 180_000L
+                  const val MAX_WORKERS = 8
+                  val COLUMNS = listOf(
+                      "Transaction ID", "Member Name", "Member ID", "Date of Birth", "Gender", "Address",
+                      "Group Number", "Plan Begin Date", "Plan Name", "Payer", "Coverage Status", "Identifier Code"
+                  )
+                  val CSV_COLUMNS = COLUMNS + "Source Link"
+              }
+
+              private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+              private var runJob: Job? = null
+
+              private val results = mutableListOf<Map<String, String>>()
+              private var failedLinks: List<String> = emptyList()
+              private var savedCount = 0
+              private var runTotal = 0
+              private var runOk = 0
+              private var statusText = "Idle"
+              private val logLines = ArrayDeque<String>()
+
+              private lateinit var scrapeJs: String
+              private lateinit var loginBox: LinearLayout
+              private lateinit var loginView: WebView
+              private lateinit var panel: ScrollView
+              private lateinit var hiddenHost: FrameLayout
+
+              private lateinit var linksEt: EditText
+              private lateinit var workersEt: EditText
+              private lateinit var delayEt: EditText
+              private lateinit var perFileEt: EditText
+              private lateinit var autoSaveCb: CheckBox
+              private lateinit var startBtn: Button
+              private lateinit var stopBtn: Button
+              private lateinit var progressBar: ProgressBar
+              private lateinit var statusTv: TextView
+              private lateinit var logTv: TextView
+
+              private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+              private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+              private val prefs by lazy { getSharedPreferences("officealy", MODE_PRIVATE) }
+              private val resultsFile get() = File(filesDir, "results.jsonl")
+              private val failedFile get() = File(filesDir, "failed.txt")
+
+              // ------------------------------------------------------------------ lifecycle
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  scrapeJs = assets.open("scrape.js").bufferedReader().use { it.readText() }
+                  CookieManager.getInstance().setAcceptCookie(true)
+                  loadSaved()
+                  buildUi()
+                  showTab(true)
+                  renderStatus()
+                  if (results.isNotEmpty()) log("${results.size} saved rows restore hui")
+              }
+
+              override fun onPause() {
+                  super.onPause()
+                  CookieManager.getInstance().flush()
+              }
+
+              override fun onDestroy() {
+                  ui.cancel()
+                  loginView.destroy()
+                  super.onDestroy()
+              }
+
+              @Suppress("DEPRECATION")
+              override fun onBackPressed() {
+                  if (loginBox.visibility == View.VISIBLE && loginView.canGoBack()) loginView.goBack()
+                  else super.onBackPressed()
+              }
+
+              // ------------------------------------------------------------------ UI
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+              private fun btn(label: String, onClick: () -> Unit): Button =
+                  Button(this).apply {
+                      this.text = label
+                      isAllCaps = false
+                      setOnClickListener { onClick() }
+                  }
+
+              private fun row(vararg views: View): LinearLayout =
+                  LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      views.forEach { addView(it, LinearLayout.LayoutParams(0, WRAP, 1f)) }
+                  }
+
+              private fun numberEt(default: String) = EditText(this).apply {
+                  setText(default)
+                  inputType = InputType.TYPE_CLASS_NUMBER
+              }
+
+              private fun labeled(title: String, et: EditText): LinearLayout =
+                  LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(4), 0, dp(4), 0)
+                      addView(TextView(this@MainActivity).apply { this.text = title; textSize = 11f })
+                      addView(et)
+                  }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              private fun configure(wv: WebView) {
+                  wv.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      userAgentString = DESKTOP_UA
+                      useWideViewPort = true
+                      loadWithOverviewMode = true
+                  }
+                  CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+              }
+
+              private fun buildUi() {
+                  val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+                  root.addView(row(btn("1. Login") { showTab(true) }, btn("2. Scrape") { showTab(false) }))
+
+                  val content = FrameLayout(this)
+                  root.addView(content, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+                  // ---- Login tab
+                  loginBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                  loginView = WebView(this).also {
+                      configure(it)
+                      it.webViewClient = WebViewClient()
+                  }
+                  loginBox.addView(btn("Pehla link yahan kholo (check)") {
+                      val first = linksEt.text.lines().map { it.trim() }.firstOrNull { it.startsWith("http") }
+                      loginView.loadUrl(first ?: "https://www.officeally.com/")
+                  })
+                  loginBox.addView(loginView, LinearLayout.LayoutParams(MATCH, 0, 1f))
+                  loginView.loadUrl("https://www.officeally.com/")
+
+                  // ---- Scrape tab
+                  val col = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(16), dp(12), dp(16), dp(24))
+                  }
+                  panel = ScrollView(this).apply { addView(col) }
+
+                  col.addView(TextView(this).apply {
+                      this.text = "Pehle Login tab me Office Ally login karo, phir yahan links paste karke Start dabao. Scrape ke dauran app khula rakho."
+                      textSize = 13f
+                  })
+
+                  linksEt = EditText(this).apply {
+                      hint = "https://sc.officeally.com/verify-eligibility/transaction/..."
+                      minLines = 5
+                      gravity = Gravity.TOP
+                      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                      textSize = 12f
+                  }
+                  col.addView(linksEt)
+
+                  workersEt = numberEt("3")
+                  delayEt = numberEt("0")
+                  perFileEt = numberEt("0")
+                  col.addView(
+                      row(
+                          labeled("Windows (1-$MAX_WORKERS)", workersEt),
+                          labeled("Extra delay (sec)", delayEt),
+                          labeled("Rows per file (0=ek)", perFileEt)
+                      )
+                  )
+
+                  autoSaveCb = CheckBox(this).apply { this.text = "Auto-save har N rows par (N = Rows per file)" }
+                  col.addView(autoSaveCb)
+
+                  startBtn = btn("▶ Start") { startRun() }
+                  stopBtn = btn("⏹ Stop") {
+                      runJob?.cancel()
+                      log("Stop requested")
+                  }.apply { isEnabled = false }
+                  col.addView(row(startBtn, stopBtn))
+
+                  col.addView(row(
+                      btn("⬇ Download CSV") { exportAll() },
+                      btn("⬇ Failed links") { exportFailed() }
+                  ))
+                  col.addView(row(
+                      btn("↻ Failed → box") {
+                          linksEt.setText(failedLinks.joinToString("\n"))
+                          log("Failed links box me daal diye, Start dabao")
+                      },
+                      btn("Clear") { clearAll() }
+                  ))
+
+                  progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+                  col.addView(progressBar, LinearLayout.LayoutParams(MATCH, WRAP))
+
+                  statusTv = TextView(this).apply { textSize = 13f; setPadding(0, dp(6), 0, dp(6)) }
+                  col.addView(statusTv)
+
+                  logTv = TextView(this).apply {
+                      textSize = 11f
+                      typeface = Typeface.MONOSPACE
+                  }
+                  col.addView(logTv)
+
+                  content.addView(loginBox, FrameLayout.LayoutParams(MATCH, MATCH))
+                  content.addView(panel, FrameLayout.LayoutParams(MATCH, MATCH))
+
+                  // Host for hidden worker WebViews (1px tall, children clipped but fully laid out)
+                  hiddenHost = FrameLayout(this).apply { clipChildren = true }
+                  root.addView(hiddenHost, LinearLayout.LayoutParams(MATCH, 1))
+
+                  setContentView(root)
+              }
+
+              private fun showTab(login: Boolean) {
+                  loginBox.visibility = if (login) View.VISIBLE else View.GONE
+                  panel.visibility = if (login) View.GONE else View.VISIBLE
+              }
+
+              private fun log(text: String) {
+                  val t = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                  logLines.addLast("[$t] $text")
+                  while (logLines.size > 60) logLines.removeFirst()
+                  logTv.text = logLines.joinToString("\n")
+              }
+
+              private fun renderStatus() {
+                  statusTv.text = "Saved: ${results.size}  |  Run: $runOk/$runTotal  |  Failed: ${failedLinks.size}  |  $statusText"
+                  progressBar.progress = if (runTotal > 0) runOk * 100 / runTotal else 0
+              }
+
+              private fun setRunning(r: Boolean) {
+                  startBtn.isEnabled = !r
+                  stopBtn.isEnabled = r
+                  statusText = if (r) "Running..." else "Idle"
+                  renderStatus()
+              }
+
+              // ------------------------------------------------------------------ run control
+
+              private fun perFile() = (perFileEt.text.toString().toIntOrNull() ?: 0).coerceAtLeast(0)
+
+              private fun startRun() {
+                  val urls = linksEt.text.lines().map { it.trim() }.filter { it.startsWith("http") }.distinct()
+                  if (urls.isEmpty()) {
+                      log("Links paste karo")
+                      return
+                  }
+                  val workers = (workersEt.text.toString().toIntOrNull() ?: 1).coerceIn(1, MAX_WORKERS)
+                  val delayMs = (delayEt.text.toString().toLongOrNull() ?: 0L).coerceIn(0L, 15L) * 1000L
+
+                  setRunning(true)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  log("Starting ${urls.size} links | $workers windows | extra delay ${delayMs / 1000}s")
+
+                  runJob = ui.launch {
+                      try {
+                          runBulk(urls, workers, delayMs)
+                      } finally {
+                          // Anything not scraped (failed, or left over after Stop) goes to the failed list
+                          val done = results.mapNotNull { it["Source Link"] }.toSet()
+                          failedLinks = urls.filter { it !in done }
+                          failedFile.writeText(failedLinks.joinToString("\n"))
+                          autoSaveCheck(true)
+                          window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                          setRunning(false)
+                          log("Finished. Saved: ${results.size} | Not downloaded: ${failedLinks.size}")
+                      }
+                  }
+              }
+
+              private suspend fun runBulk(urls: List<String>, workers: Int, delayMs: Long) {
+                  val known = results.mapNotNull { it["Source Link"] }.toSet()
+                  val todo = urls.filter { it !in known }
+                  val skipped = urls.size - todo.size
+                  if (skipped > 0) log("$skipped link pehle se scrape hain, skip kiye")
+
+                  runTotal = todo.size
+                  runOk = 0
+                  renderStatus()
+                  if (todo.isEmpty()) {
+                      log("Koi naya link nahi")
+                      return
+                  }
+
+                  var failed = runPass(todo, workers, delayMs, "[Pass 1]")
+                  var round = 1
+                  while (round <= 2 && failed.isNotEmpty()) {
+                      log("Retry round $round: ${failed.size} links dobara...")
+                      failed = runPass(failed, workers, delayMs, "[Retry $round]")
+                      round++
+                  }
+              }
+
+              private suspend fun runPass(urls: List<String>, workers: Int, delayMs: Long, label: String): List<String> {
+                  val failed = mutableListOf<String>()
+                  var next = 0
+                  var finished = 0
+                  val n = minOf(workers, urls.size)
+                  log("$label ${urls.size} links | $n windows")
+
+                  coroutineScope {
+                      repeat(n) { w ->
+                          launch {
+                              val wv = createWorker()
+                              try {
+                                  delay(w * 1200L) // stagger starts
+                                  while (isActive) {
+                                      val i = next++
+                                      if (i >= urls.size) break
+                                      val url = urls[i]
+                                      val data = processOne(wv, url, delayMs)
+                                      finished++
+                                      if (data != null) {
+                                          addResult(data + ("Source Link" to url))
+                                          log("✓ W${w + 1} $label $finished/${urls.size} — ${data["Member Name"]}")
+                                      } else {
+                                          failed.add(url)
+                                          log("✗ W${w + 1} $label $finished/${urls.size} — fail, end me retry")
+                                      }
+                                  }
+                              } finally {
+                                  destroyWorker(wv)
+                              }
+                          }
+                      }
+                  }
+                  return failed
+              }
+
+              private fun createWorker(): WebView {
+                  val wv = WebView(this)
+                  configure(wv)
+                  wv.layoutParams = FrameLayout.LayoutParams(1280, 900)
+                  hiddenHost.addView(wv)
+                  return wv
+              }
+
+              private fun destroyWorker(wv: WebView) {
+                  hiddenHost.removeView(wv)
+                  wv.stopLoading()
+                  wv.destroy()
+              }
+
+              // ------------------------------------------------------------------ scraping
+
+              private fun isGood(d: Map<String, String>?) =
+                  d != null && !d["Member Name"].isNullOrBlank() && !d["Member ID"].isNullOrBlank()
+
+              private suspend fun loadAndWait(wv: WebView, kick: () -> Unit) {
+                  withTimeoutOrNull(20_000L) {
+                      suspendCancellableCoroutine<Unit> { cont ->
+                          wv.webViewClient = object : WebViewClient() {
+                              override fun onPageFinished(view: WebView?, url: String?) {
+                                  if (cont.isActive) cont.resume(Unit)
+                              }
+                          }
+                          kick()
+                      }
+                  }
+                  delay(1500)
+              }
+
+              private suspend fun scrape(wv: WebView): Map<String, String>? =
+                  withTimeoutOrNull(8_000L) {
+                      suspendCancellableCoroutine<Map<String, String>?> { cont ->
+                          wv.evaluateJavascript(scrapeJs) { raw ->
+                              val parsed: Map<String, String>? = try {
+                                  val v = JSONTokener(raw ?: "null").nextValue()
+                                  if (v is String) {
+                                      val o = JSONObject(v)
+                                      o.keys().asSequence().associateWith { k -> o.optString(k, "") }
+                                  } else null
+                              } catch (e: Exception) {
+                                  null
+                              }
+                              if (cont.isActive) cont.resume(parsed)
+                          }
+                      }
+                  }
+
+              private suspend fun processOne(wv: WebView, url: String, delayMs: Long): Map<String, String>? {
+                  loadAndWait(wv) { wv.loadUrl(url) }
+
+                  val start = System.currentTimeMillis()
+                  var coreSince = 0L
+                  var reloaded = 0
+
+                  while (System.currentTimeMillis() - start < MAX_WAIT_MS) {
+                      val d = scrape(wv)
+                      if (d != null && isGood(d)) {
+                          if (!d["Payer"].isNullOrBlank()) {
+                              if (delayMs > 0) delay(delayMs)
+                              return d
+                          }
+                          if (coreSince == 0L) coreSince = System.currentTimeMillis()
+                          if (System.currentTimeMillis() - coreSince > 6_000L) return d
+                      }
+
+                      val elapsed = System.currentTimeMillis() - start
+                      if (elapsed > 60_000L * (reloaded + 1) && reloaded < 2) {
+                          reloaded++
+                          loadAndWait(wv) { wv.reload() }
+                          coreSince = 0L
+                      }
+                      delay(1000)
+                  }
+                  return null
+              }
+
+              // ------------------------------------------------------------------ results / storage
+
+              private fun addResult(row: Map<String, String>) {
+                  results.add(row)
+                  runOk++
+                  try {
+                      resultsFile.appendText(JSONObject(row).toString() + "\n")
+                  } catch (e: Exception) {
+                      log("Local save error: ${e.message}")
+                  }
+                  renderStatus()
+                  autoSaveCheck(false)
+              }
+
+              private fun loadSaved() {
+                  if (resultsFile.exists()) {
+                      resultsFile.forEachLine { line ->
+                          try {
+                              val o = JSONObject(line)
+                              results.add(CSV_COLUMNS.associateWith { o.optString(it, "") })
+                          } catch (e: Exception) {
+                              // skip bad line
+                          }
+                      }
+                  }
+                  if (failedFile.exists()) failedLinks = failedFile.readLines().filter { it.isNotBlank() }
+                  savedCount = prefs.getInt("saved", 0).coerceAtMost(results.size)
+              }
+
+              private fun clearAll() {
+                  if (runJob?.isActive == true) {
+                      log("Pehle Stop karo")
+                      return
+                  }
+                  results.clear()
+                  failedLinks = emptyList()
+                  savedCount = 0
+                  runTotal = 0
+                  runOk = 0
+                  resultsFile.delete()
+                  failedFile.delete()
+                  prefs.edit().putInt("saved", 0).apply()
+                  renderStatus()
+                  log("Results cleared")
+              }
+
+              // ------------------------------------------------------------------ CSV / downloads
+
+              private fun stamp() = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+
+              private fun q(v: String?) = "\"" + (v ?: "").replace("\"", "\"\"") + "\""
+
+              private fun buildCsv(rows: List<Map<String, String>>): String {
+                  val sb = StringBuilder("\uFEFF")
+                  sb.append(CSV_COLUMNS.joinToString(",") { q(it) }).append('\n')
+                  rows.forEach { r -> sb.append(CSV_COLUMNS.joinToString(",") { q(r[it]) }).append('\n') }
+                  return sb.toString()
+              }
+
+              private fun saveToDownloads(name: String, text: String, mime: String): Boolean {
+                  return try {
+                      val values = ContentValues().apply {
+                          put(MediaStore.Downloads.DISPLAY_NAME, name)
+                          put(MediaStore.Downloads.MIME_TYPE, mime)
+                          put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/OfficeAlly")
+                      }
+                      val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+                      val stream = contentResolver.openOutputStream(uri) ?: return false
+                      stream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                      true
+                  } catch (e: Exception) {
+                      log("Save error: ${e.message}")
+                      false
+                  }
+              }
+
+              // perFile = 0 -> one file; else split into files of perFile rows. Returns number of files (0 = failed)
+              private fun saveCsvFiles(rows: List<Map<String, String>>, perFile: Int, prefix: String): Int {
+                  if (rows.isEmpty()) return 0
+                  val size = if (perFile > 0) perFile else rows.size
+                  val parts = (rows.size + size - 1) / size
+                  for (p in 0 until parts) {
+                      val slice = rows.subList(p * size, minOf(rows.size, (p + 1) * size))
+                      val name = if (parts == 1) "$prefix.csv" else "${prefix}_part${p + 1}of${parts}.csv"
+                      if (!saveToDownloads(name, buildCsv(slice), "text/csv")) return 0
+                  }
+                  return parts
+              }
+
+              private fun exportAll() {
+                  if (results.isEmpty()) {
+                      log("Abhi koi data nahi")
+                      return
+                  }
+                  val parts = saveCsvFiles(results.toList(), perFile(), "OfficeAlly_${results.size}rows_${stamp()}")
+                  if (parts > 0) log("Downloaded ${results.size} rows in $parts file(s) → Downloads/OfficeAlly")
+              }
+
+              private fun exportFailed() {
+                  if (failedLinks.isEmpty()) {
+                      log("Failed links nahi hain")
+                      return
+                  }
+                  if (saveToDownloads("OfficeAlly_failed_links_${stamp()}.txt", failedLinks.joinToString("\n"), "text/plain")) {
+                      log("Downloaded ${failedLinks.size} failed links")
+                  }
+              }
+
+              private fun autoSaveCheck(isFinal: Boolean) {
+                  val n = perFile()
+                  if (!autoSaveCb.isChecked || n <= 0) return
+                  while (results.size - savedCount >= n || (isFinal && results.size > savedCount)) {
+                      val from = savedCount
+                      val to = minOf(results.size, from + n)
+                      val slice = results.subList(from, to).toList()
+                      if (saveCsvFiles(slice, 0, "OfficeAlly_rows${from + 1}-${to}_${stamp()}") == 0) return
+                      savedCount = to
+                      prefs.edit().putInt("saved", savedCount).apply()
+                      log("Auto-saved rows ${from + 1}-$to")
+                  }
+              }
+          }
+          FILE_END_7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfficeAlly-Bulk-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
